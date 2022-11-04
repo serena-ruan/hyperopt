@@ -201,7 +201,7 @@ def coarse_utcnow():
     # http://api.mongodb.org/python/current/api/bson/son.html#dt
     """
     now = datetime.datetime.utcnow()
-    microsec = (now.microsecond // 10 ** 3) * (10 ** 3)
+    microsec = (now.microsecond // 10**3) * (10**3)
     return datetime.datetime(
         now.year, now.month, now.day, now.hour, now.minute, now.second, microsec
     )

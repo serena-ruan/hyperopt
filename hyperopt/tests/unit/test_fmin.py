@@ -80,7 +80,7 @@ def test_duplicate_label_is_error():
 
     def fn(xy):
         x, y = xy
-        return x ** 2 + y ** 2
+        return x**2 + y**2
 
     with pytest.raises(exceptions.DuplicateLabel):
         fmin(
@@ -308,7 +308,7 @@ def test_loss_threshold():
     loss_threshold = 0.001
     hypopt_trials = Trials()
     fmin(
-        fn=lambda x: x ** 2,
+        fn=lambda x: x**2,
         space=hp.uniform("x", -10, 10),
         loss_threshold=loss_threshold,
         algo=rand.suggest,

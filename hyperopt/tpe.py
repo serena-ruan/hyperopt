@@ -146,7 +146,7 @@ def GMM1_lpdf(samples, weights, mus, sigmas, low=None, high=None, q=None):
         dist = samples[:, None] - mus
         mahal = (old_div(dist, np.maximum(sigmas, EPS))) ** 2
         # mahal shape is (n_samples, n_components)
-        Z = np.sqrt(2 * np.pi * sigmas ** 2)
+        Z = np.sqrt(2 * np.pi * sigmas**2)
         coef = weights / Z / p_accept
         rval = logsum_rows(-0.5 * mahal + np.log(coef))
     else:

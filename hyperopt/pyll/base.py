@@ -973,7 +973,7 @@ def log(a):
 
 @scope.define_pure
 def pow(a, b):
-    return a ** b
+    return a**b
 
 
 @scope.define_pure

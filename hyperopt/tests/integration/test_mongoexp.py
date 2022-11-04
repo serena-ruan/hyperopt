@@ -396,7 +396,7 @@ def objective_with_attachments(x: float):
     """Objective function that includes extra information as attachments and
     dictionary attributes."""
     return {
-        "loss": x ** 2,
+        "loss": x**2,
         "status": STATUS_OK,
         "extra_stuff": {"type": None, "value": [0, 1, 2]},
         "attachments": {"time": pickle.dumps(time.time)},

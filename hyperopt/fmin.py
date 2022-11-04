@@ -276,7 +276,7 @@ class FMinIter:
                     # `new_trials`. This is the core of `run`, all the rest is just
                     # processes orchestration
                     new_trials = algo(
-                        new_ids, self.domain, trials, self.rstate.integers(2 ** 31 - 1)
+                        new_ids, self.domain, trials, self.rstate.integers(2**31 - 1)
                     )
                     assert len(new_ids) >= len(new_trials)
 

@@ -6,7 +6,7 @@ def test_landing_screen():
         if case == "case 1":
             return val
         else:
-            return val ** 2
+            return val**2
 
     # define a search space
     from hyperopt import hp
