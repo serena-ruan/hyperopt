@@ -55,7 +55,12 @@ class SparkTrials(Trials):
     MAX_CONCURRENT_JOBS_ALLOWED = 128
 
     def __init__(
-        self, parallelism=None, timeout=None, loss_threshold=None, spark_session=None
+        self,
+        parallelism=None,
+        timeout=None,
+        loss_threshold=None,
+        spark_session=None,
+        train_spark_model=False,
     ):
         """
         :param parallelism: Maximum number of parallel trials to run,
@@ -115,6 +120,9 @@ class SparkTrials(Trials):
         self.loss_threshold = loss_threshold
         self._fmin_cancelled = False
         self._fmin_cancelled_reason = None
+        self.train_spark_model = train_spark_model
+        if self.train_spark_model:
+            self.asynchronous = False
         self.refresh()
 
     @staticmethod
@@ -230,7 +238,7 @@ class SparkTrials(Trials):
             not catch_eval_exceptions
         ), "SparkTrials does not support `catch_eval_exceptions`"
 
-        state = _SparkFMinState(self._spark, fn, space, self)
+        state = _SparkFMinState(self._spark, fn, space, self, self.train_spark_model)
 
         # Will launch a dispatcher thread which runs each trial task as one spark job.
         state.launch_dispatcher()
@@ -283,11 +291,12 @@ class _SparkFMinState:
     Each trial's thread runs 1 Spark job with 1 task.
     """
 
-    def __init__(self, spark, eval_function, space, trials):
+    def __init__(self, spark, eval_function, space, trials, train_spark_model):
         self.spark = spark
         self.eval_function = eval_function
         self.space = space
         self.trials = trials
+        self.train_spark_model = train_spark_model
         self._fmin_done = False
         self._dispatcher_thread = None
         self._task_threads = set()
@@ -476,38 +485,53 @@ class _SparkFMinState:
                     e._tb_str = _traceback_string
                     yield e
 
+            def run_distributed_task():
+                domain = base.Domain(
+                    local_eval_function, local_space, pass_expr_memo_ctrl=None
+                )
+                try:
+                    result = domain.evaluate(
+                        params, ctrl=None, attach_attachments=False
+                    )
+                    return result
+                except BaseException as e:
+                    return e
+
             try:
-                worker_rdd = self.spark.sparkContext.parallelize([0], 1)
-                if self.trials._spark_supports_job_cancelling:
-                    if self.trials._spark_pinned_threads_enabled:
-                        spark_context = self.spark.sparkContext
-                        spark_context.setLocalProperty(
-                            "spark.jobGroup.id", self._job_group_id
-                        )
-                        spark_context.setLocalProperty(
-                            "spark.job.description", self._job_desc
-                        )
-                        spark_context.setLocalProperty(
-                            "spark.job.interruptOnCancel",
-                            str(self._job_interrupt_on_cancel).lower(),
-                        )
-                        result_or_e = worker_rdd.mapPartitions(
-                            run_task_on_executor
-                        ).collect()[0]
+                if self.train_spark_model:
+                    result_or_e = run_distributed_task()
+                else:
+                    worker_rdd = self.spark.sparkContext.parallelize([0], 1)
+                    if self.trials._spark_supports_job_cancelling:
+                        if self.trials._spark_pinned_threads_enabled:
+                            spark_context = self.spark.sparkContext
+                            spark_context.setLocalProperty(
+                                "spark.jobGroup.id", self._job_group_id
+                            )
+                            spark_context.setLocalProperty(
+                                "spark.job.description", self._job_desc
+                            )
+                            spark_context.setLocalProperty(
+                                "spark.job.interruptOnCancel",
+                                str(self._job_interrupt_on_cancel).lower(),
+                            )
+                            result_or_e = worker_rdd.mapPartitions(
+                                run_task_on_executor
+                            ).collect()[0]
+                        else:
+                            result_or_e = worker_rdd.mapPartitions(
+                                run_task_on_executor
+                            ).collectWithJobGroup(
+                                self._job_group_id,
+                                self._job_desc,
+                                self._job_interrupt_on_cancel,
+                            )[
+                                0
+                            ]
                     else:
                         result_or_e = worker_rdd.mapPartitions(
                             run_task_on_executor
-                        ).collectWithJobGroup(
-                            self._job_group_id,
-                            self._job_desc,
-                            self._job_interrupt_on_cancel,
-                        )[
-                            0
-                        ]
-                else:
-                    result_or_e = worker_rdd.mapPartitions(
-                        run_task_on_executor
-                    ).collect()[0]
+                        ).collect()[0]
             except BaseException as e:
                 # I recommend to catch all exceptions here, it can make the program more robust.
                 # There're several possible reasons lead to raising exception here.

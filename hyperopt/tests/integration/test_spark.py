@@ -58,10 +58,15 @@ class BaseSparkContext:
             SparkSession.builder.master(
                 f"local[{BaseSparkContext.NUM_SPARK_EXECUTORS}]"
             )
+            .config("spark.jars.packages", "org.apache.hadoop:hadoop-azure:3.2.3")
             .appName(cls.__name__)
             .getOrCreate()
         )
         cls._sc = cls._spark.sparkContext
+        cls._spark.conf.set(
+            "spark.hadoop.fs.wasb.impl",
+            "org.apache.hadoop.fs.azure.NativeAzureFileSystem",
+        )
         cls._pin_mode_enabled = isinstance(cls._sc._gateway, ClientServer)
         cls.checkpointDir = tempfile.mkdtemp()
         cls._sc.setCheckpointDir(cls.checkpointDir)
@@ -339,6 +344,113 @@ class FMinTestCase(unittest.TestCase, BaseSparkContext):
                 ),
             )
             self.assert_task_succeeded(log_output, 0)
+
+    def test_spark_trials_new(self):
+        from sklearn.datasets import load_iris
+        from sklearn.model_selection import cross_val_score
+        from sklearn.svm import SVC
+
+        from hyperopt import fmin, tpe, hp, SparkTrials, STATUS_OK, Trials
+
+        iris = iris = load_iris()
+        X = iris.data
+        y = iris.target
+
+        def objective(C):
+            # Create a support vector classifier model
+            clf = SVC(C=C)
+
+            # Use the cross-validation accuracy to compare the models' performance
+            accuracy = cross_val_score(clf, X, y).mean()
+
+            # Hyperopt tries to minimize the objective function. A higher accuracy value means a better model, so you must return the negative accuracy.
+            return {"loss": -accuracy, "status": STATUS_OK}
+
+        search_space = hp.lognormal("C", 0, 1.0)
+        algo = tpe.suggest
+        spark_trials = SparkTrials()
+
+        argmin = fmin(
+            fn=objective,
+            space=search_space,
+            algo=algo,
+            max_evals=16,
+            trials=spark_trials,
+        )
+
+        print(argmin)
+
+    def test_sparkml_models(self):
+        spark_trials = SparkTrials(train_spark_model=True)
+        full_training_data = self.spark.read.load(
+            "wasbs://public@serenawstest1.blob.core.windows.net/full_training_data.txt"
+        )
+        training_data, validation_data = full_training_data.randomSplit(
+            [0.8, 0.2], seed=42
+        )
+        test_data = self.spark.read.load(
+            "wasbs://public@serenawstest1.blob.core.windows.net/test_data.txt"
+        )
+
+        def train_tree(minInstancesPerNode, maxBins):
+            from pyspark.ml import Pipeline
+            from pyspark.ml.classification import DecisionTreeClassifier
+            from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+            from pyspark.ml.feature import StringIndexer
+
+            # StringIndexer: Read input column "label" (digits) and annotate them as categorical values.
+            indexer = StringIndexer(inputCol="label", outputCol="indexedLabel")
+
+            # DecisionTreeClassifier: Learn to predict column "indexedLabel" using the "features" column.
+            dtc = DecisionTreeClassifier(
+                labelCol="indexedLabel",
+                minInstancesPerNode=minInstancesPerNode,
+                maxBins=maxBins,
+            )
+
+            # Chain indexer and dtc together into a single ML Pipeline.
+            pipeline = Pipeline(stages=[indexer, dtc])
+            model = pipeline.fit(training_data)
+
+            # Define an evaluation metric and evaluate the model on the validation dataset.
+            evaluator = MulticlassClassificationEvaluator(
+                labelCol="indexedLabel", metricName="f1"
+            )
+            predictions = model.transform(validation_data)
+            validation_metric = evaluator.evaluate(predictions)
+
+            return model, validation_metric
+
+        from hyperopt import fmin, tpe, hp, STATUS_OK
+
+        def train_with_hyperopt(params):
+            # For integer parameters, make sure to convert them to int type if Hyperopt is searching over a continuous range of values.
+            minInstancesPerNode = int(params["minInstancesPerNode"])
+            maxBins = int(params["maxBins"])
+
+            model, f1_score = train_tree(minInstancesPerNode, maxBins)
+
+            # Hyperopt expects you to return a loss (for which lower is better), so take the negative of the f1_score (for which higher is better).
+            loss = -f1_score
+            return {"loss": loss, "status": STATUS_OK}
+
+        import numpy as np
+
+        space = {
+            "minInstancesPerNode": hp.uniform("minInstancesPerNode", 10, 200),
+            "maxBins": hp.uniform("maxBins", 2, 32),
+        }
+
+        with patch_logger("hyperopt-spark", logging.DEBUG) as output:
+            algo = tpe.suggest
+            best_params = fmin(
+                fn=train_with_hyperopt,
+                space=space,
+                algo=algo,
+                max_evals=1,
+                trials=spark_trials,
+            )
+            print(best_params)
 
     def test_all_failed_trials(self):
         spark_trials = SparkTrials(parallelism=1)
